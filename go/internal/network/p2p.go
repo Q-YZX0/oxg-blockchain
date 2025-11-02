@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/Q-YZX0/oxy-blockchain/internal/consensus"
+	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
 )
 
 // P2PNetwork maneja la comunicación P2P usando oxygen-sdk mesh

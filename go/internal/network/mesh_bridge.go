@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/Q-YZX0/oxy-blockchain/internal/consensus"
+	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
 )
 
 // MeshBridge conecta CometBFT con oxygen-sdk mesh network
@@ -176,6 +177,17 @@ func (mb *MeshBridge) subscribe(topic string) error {
 
 // readMessages lee mensajes del WebSocket
 func (mb *MeshBridge) readMessages() {
+	defer func() {
+		// Recover de panics de WebSocket para evitar que terminen el proceso
+		if r := recover(); r != nil {
+			log.Printf("⚠️ Panic en readMessages recuperado: %v", r)
+			// Cerrar conexión y reconectar
+			mb.closeConnection()
+			time.Sleep(2 * time.Second)
+			mb.reconnect()
+		}
+	}()
+
 	for {
 		select {
 		case <-mb.stopChan:
@@ -188,18 +200,42 @@ func (mb *MeshBridge) readMessages() {
 			mb.connMutex.RUnlock()
 
 			if conn == nil {
-				time.Sleep(1 * time.Second)
+				time.Sleep(2 * time.Second)
+				// Intentar reconectar si no hay conexión
+				if mb.running {
+					mb.reconnect()
+				}
 				continue
 			}
 
-			// Leer mensaje con timeout
-			conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+			// Leer mensaje con timeout más largo (120 segundos para evitar desconexiones frecuentes)
+			// El servidor mesh puede tardar en responder, especialmente si no hay tráfico
+			readDeadline := time.Now().Add(120 * time.Second)
+			if err := conn.SetReadDeadline(readDeadline); err != nil {
+				log.Printf("⚠️ Error configurando read deadline: %v", err)
+				mb.closeConnection()
+				time.Sleep(2 * time.Second)
+				mb.reconnect()
+				continue
+			}
 			
 			var msg MeshMessage
 			if err := conn.ReadJSON(&msg); err != nil {
+				// Verificar si es un error de cierre esperado
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					log.Printf("Error leyendo mensaje WebSocket: %v", err)
-					// Intentar reconectar
+					log.Printf("⚠️ Error leyendo mensaje WebSocket: %v", err)
+				} else if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Printf("ℹ️ Conexión WebSocket cerrada normalmente")
+				} else {
+					log.Printf("⚠️ Error WebSocket: %v", err)
+				}
+				
+				// Cerrar conexión actual y reconectar
+				mb.closeConnection()
+				time.Sleep(2 * time.Second)
+				
+				// Intentar reconectar solo si aún está corriendo
+				if mb.running {
 					mb.reconnect()
 				}
 				continue
@@ -207,7 +243,7 @@ func (mb *MeshBridge) readMessages() {
 
 			// Procesar mensaje
 			if err := mb.handleMessage(&msg); err != nil {
-				log.Printf("Error procesando mensaje: %v", err)
+				log.Printf("⚠️ Error procesando mensaje: %v", err)
 			}
 		}
 	}
@@ -248,11 +284,42 @@ func (mb *MeshBridge) handleMessage(msg *MeshMessage) error {
 		}
 		return nil
 	
+	case "error":
+		// Mensajes de error del servidor mesh (pueden ser errores de conexión, autenticación, etc.)
+		// Ignorar silenciosamente - ya se manejan los errores en readMessages()
+		return nil
+	
 	default:
-		log.Printf("Tipo de mensaje desconocido: %s", msg.Type)
+		// Solo loguear tipos desconocidos que no sean "error" (para evitar spam)
+		if msg.Type != "error" {
+			log.Printf("Tipo de mensaje desconocido: %s", msg.Type)
+		}
 	}
 	
 	return nil
+}
+
+// closeConnection cierra la conexión WebSocket de forma segura
+func (mb *MeshBridge) closeConnection() {
+	mb.connMutex.Lock()
+	defer mb.connMutex.Unlock()
+
+	if mb.conn != nil {
+		// Cerrar de forma no bloqueante para evitar deadlocks
+		conn := mb.conn
+		mb.conn = nil
+		
+		// Cerrar en goroutine separada para evitar bloquear
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Ignorar panics al cerrar (puede estar ya cerrado)
+				}
+			}()
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, ""))
+			conn.Close()
+		}()
+	}
 }
 
 // reconnect intenta reconectar al mesh
@@ -283,9 +350,10 @@ func (mb *MeshBridge) reconnect() {
 	log.Printf("⚠️ No se pudo reconectar a mesh después de 5 intentos")
 }
 
-// heartbeat envía ping periódico
+// heartbeat envía ping periódico para mantener la conexión viva
 func (mb *MeshBridge) heartbeat() {
-	ticker := time.NewTicker(30 * time.Second)
+	// Ping cada 45 segundos (menos frecuente que el timeout de 120s para evitar timeout)
+	ticker := time.NewTicker(45 * time.Second)
 	defer ticker.Stop()
 
 	for {

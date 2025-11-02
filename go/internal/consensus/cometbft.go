@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
-	"github.com/Q-YZX0/oxy-blockchain/internal/execution"
+	execution "github.com/Q-YZX0/oxy-blockchain/internal/execution"
+	"github.com/Q-YZX0/oxy-blockchain/internal/metrics"
 )
 
 // CometBFT es el wrapper para CometBFT que maneja el consenso
@@ -62,9 +63,22 @@ func NewCometBFT(
 		rateLimiter: rateLimiter,
 		running:     false,
 	}
+	
+	// Conectar el mempool local con ABCIApp para que PrepareProposal pueda usarlo
+	if cometNode.abciApp != nil {
+		cometNode.abciApp.SetGetMempool(c.GetMempool)
+		cometNode.abciApp.SetClearMempoolTx(c.RemoveTransactionFromMempool)
+	}
 
 	log.Println("Consenso CometBFT inicializado")
 	return c, nil
+}
+
+// SetMetrics establece las métricas en el ABCIApp
+func (c *CometBFT) SetMetrics(m *metrics.Metrics) {
+	if c.node != nil && c.node.abciApp != nil {
+		c.node.abciApp.SetMetrics(m)
+	}
 }
 
 // Start inicia el motor de consenso
@@ -187,14 +201,14 @@ func (c *CometBFT) SubmitTransaction(tx *Transaction) error {
 		}
 	}
 
-	// Agregar al mempool
+	// Agregar al mempool local
 	c.mempool = append(c.mempool, tx)
 	c.mempoolMutex.Unlock()
 
 	log.Printf("📥 Transacción agregada al mempool: %s", tx.Hash)
 
-	// La transacción será procesada por CometBFT cuando se produzca el siguiente bloque
-	// CometBFT llamará a CheckTx y luego DeliverTx del ABCI App
+	// La transacción será procesada por CometBFT cuando PrepareProposal use el mempool local
+	// PrepareProposal incluirá las transacciones del mempool local en los bloques
 
 	return nil
 }
@@ -225,5 +239,39 @@ func (c *CometBFT) ClearMempool() {
 	defer c.mempoolMutex.Unlock()
 
 	c.mempool = make([]*Transaction, 0)
+}
+
+// RemoveTransactionFromMempool remueve una transacción específica del mempool
+func (c *CometBFT) RemoveTransactionFromMempool(txHash string) {
+	c.mempoolMutex.Lock()
+	defer c.mempoolMutex.Unlock()
+
+	// Buscar y remover la transacción
+	for i, tx := range c.mempool {
+		if tx.Hash == txHash {
+			// Remover sin preservar orden (más rápido)
+			c.mempool[i] = c.mempool[len(c.mempool)-1]
+			c.mempool = c.mempool[:len(c.mempool)-1]
+			log.Printf("🗑️ Transacción removida del mempool: %s", txHash)
+			return
+		}
+	}
+}
+
+// GetValidators retorna la lista de validadores activos
+func (c *CometBFT) GetValidators() []*Validator {
+	if c.node == nil || c.node.abciApp == nil || c.node.abciApp.validators == nil {
+		return []*Validator{}
+	}
+	
+	return c.node.abciApp.validators.GetActiveValidators()
+}
+
+// GetValidatorSet retorna el ValidatorSet completo (para uso interno)
+func (c *CometBFT) GetValidatorSet() *ValidatorSet {
+	if c.node == nil || c.node.abciApp == nil {
+		return nil
+	}
+	return c.node.abciApp.validators
 }
 

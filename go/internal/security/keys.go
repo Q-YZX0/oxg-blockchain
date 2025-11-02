@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -36,8 +37,17 @@ func NewKeyManager(keystoreDir string) (*KeyManager, error) {
 // LoadPrivateKey carga una clave privada desde el keystore
 func (km *KeyManager) LoadPrivateKey(address common.Address, password string) (*ecdsa.PrivateKey, error) {
 	// Buscar cuenta en keystore
-	account := km.keystore.Find(keystore.Account{Address: address})
-	if account == nil {
+	accountList := km.keystore.Accounts()
+	var account accounts.Account
+	found := false
+	for _, acc := range accountList {
+		if acc.Address == address {
+			account = acc
+			found = true
+			break
+		}
+	}
+	if !found {
 		return nil, fmt.Errorf("cuenta no encontrada en keystore: %s", address.Hex())
 	}
 

@@ -9,6 +9,8 @@
 go.work
 /data/
 /tmp/
+docs/
+
 
 # Node.js
 node_modules/

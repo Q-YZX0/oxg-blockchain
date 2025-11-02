@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +62,7 @@ func (s *RestServer) Start() error {
 	mux.HandleFunc("/api/v1/transactions/", s.handleTransactions)
 	mux.HandleFunc("/api/v1/accounts/", s.handleAccounts)
 	mux.HandleFunc("/api/v1/submit-tx", s.handleSubmitTx)
+	mux.HandleFunc("/api/v1/validators", s.handleValidators) // Nuevo endpoint
 
 	// Middleware CORS básico
 	handler := s.corsMiddleware(mux)
@@ -73,7 +76,41 @@ func (s *RestServer) Start() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	return s.server.ListenAndServe()
+	// Log antes de iniciar (usar fmt.Printf y os.Stdout para asegurar que se vea)
+	fmt.Fprintf(os.Stdout, "[REST Server] Intentando iniciar en %s\n", addr)
+	os.Stdout.Sync() // Forzar escritura inmediata
+	
+	// ListenAndServe es bloqueante - si funciona, nunca retorna hasta que se cierre el servidor
+	// Si hay error, retorna inmediatamente
+	fmt.Fprintf(os.Stdout, "[REST Server] Llamando a ListenAndServe()...\n")
+	os.Stdout.Sync()
+	
+	// Iniciar goroutine para confirmar que el servidor está escuchando después de un breve delay
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		// Intentar hacer una conexión local para verificar que el servidor está escuchando
+		resp, err := http.Get("http://" + addr + "/health")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[REST Server] ADVERTENCIA: Servidor no responde en /health después de 500ms: %v\n", err)
+			os.Stderr.Sync()
+		} else {
+			resp.Body.Close()
+			fmt.Fprintf(os.Stdout, "[REST Server] ✅ Servidor confirmado escuchando en %s (health check OK)\n", addr)
+			os.Stdout.Sync()
+		}
+	}()
+	
+	err := s.server.ListenAndServe()
+	if err != nil && err != http.ErrServerClosed {
+		fmt.Fprintf(os.Stderr, "[REST Server] ERROR al iniciar: %v (tipo: %T)\n", err, err)
+		os.Stderr.Sync()
+		return err
+	}
+	
+	// Si llegamos aquí, el servidor se cerró correctamente
+	fmt.Fprintf(os.Stdout, "[REST Server] Servidor cerrado\n")
+	os.Stdout.Sync()
+	return nil
 }
 
 // Stop detiene el servidor REST
@@ -130,11 +167,33 @@ func (s *RestServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m := s.metrics.GetMetrics()
+	// Verificar que metrics no sea nil
+	if s.metrics == nil {
+		http.Error(w, "Metrics not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Actualizar métricas dinámicas desde consenso y executor si están disponibles
+	if s.consensus != nil {
+		// Actualizar altura de bloque actual
+		latestBlock, err := s.consensus.GetLatestBlock()
+		if err == nil && latestBlock != nil {
+			s.metrics.SetBlockHeight(latestBlock.Header.Height)
+		}
+		
+		// Actualizar tamaño del mempool
+		mempool := s.consensus.GetMempool()
+		if mempool != nil {
+			s.metrics.SetMempoolSize(len(mempool))
+		}
+	}
+	
+	// Obtener métricas actualizadas
+	metricsData := s.metrics.GetMetrics()
 	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(m)
+	json.NewEncoder(w).Encode(metricsData)
 }
 
 // handleBlocks maneja /api/v1/blocks/{height} o /api/v1/blocks/latest
@@ -205,15 +264,31 @@ func (s *RestServer) handleTransactions(w http.ResponseWriter, r *http.Request) 
 	w.Write(txData)
 }
 
-// handleAccounts maneja /api/v1/accounts/{address}
+// handleAccounts maneja /api/v1/accounts/{address} y /api/v1/accounts/{address}/fund
 func (s *RestServer) handleAccounts(w http.ResponseWriter, r *http.Request) {
+	// Extraer dirección del path
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
+	
+	// Log para debug
+	log.Printf("🔍 handleAccounts: path=%s, method=%s", path, r.Method)
+	
+	// Verificar si es el endpoint de fondear
+	// El path puede ser "0x.../fund" o solo "/fund" si la dirección viene en el path completo
+	if strings.HasSuffix(path, "/fund") {
+		// Remover "/fund" del path
+		address := strings.TrimSuffix(path, "/fund")
+		log.Printf("💰 handleFundAccount: address=%s", address)
+		s.handleFundAccount(w, r, address)
+		return
+	}
+	
+	// Endpoint GET /api/v1/accounts/{address}
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Extraer dirección del path
-	address := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
+	address := path
 	
 	// Validar dirección
 	if !common.IsHexAddress(address) {
@@ -236,6 +311,77 @@ func (s *RestServer) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(accountState)
+}
+
+// handleFundAccount maneja POST /api/v1/accounts/{address}/fund
+func (s *RestServer) handleFundAccount(w http.ResponseWriter, r *http.Request, address string) {
+	log.Printf("💰 handleFundAccount llamado: address=%s, method=%s", address, r.Method)
+	
+	if r.Method != http.MethodPost {
+		log.Printf("❌ handleFundAccount: método incorrecto: %s (esperado POST)", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Validar dirección (puede estar vacía si viene del path completo)
+	if address == "" {
+		// Intentar extraer del path completo
+		path := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
+		path = strings.TrimSuffix(path, "/fund")
+		address = path
+		log.Printf("🔍 handleFundAccount: dirección extraída del path: %s", address)
+	}
+	
+	// Validar dirección
+	if !common.IsHexAddress(address) {
+		log.Printf("❌ handleFundAccount: dirección inválida: %s", address)
+		http.Error(w, "Invalid Ethereum address", http.StatusBadRequest)
+		return
+	}
+	
+	log.Printf("✅ handleFundAccount: dirección válida: %s", address)
+
+	// Parsear body
+	var req struct {
+		Amount string `json:"amount"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Error parsing request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.Amount == "" {
+		http.Error(w, "Amount is required", http.StatusBadRequest)
+		return
+	}
+
+	// Obtener executor EVM
+	if s.executor == nil {
+		http.Error(w, "EVM executor not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Fondear cuenta
+	if err := s.executor.FundAccount(address, req.Amount); err != nil {
+		http.Error(w, fmt.Sprintf("Error funding account: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Obtener estado actualizado de la cuenta
+	accountState, err := s.executor.GetState(address)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error getting account state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Account %s funded with %s tokens", address, req.Amount),
+		"account": accountState,
+	})
 }
 
 // handleSubmitTx maneja /api/v1/submit-tx
@@ -274,6 +420,55 @@ func (s *RestServer) handleSubmitTx(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"hash":    tx.Hash,
 		"message": "Transaction submitted successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleValidators maneja /api/v1/validators
+func (s *RestServer) handleValidators(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.consensus == nil {
+		http.Error(w, "Consensus not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Obtener validadores activos
+	validators := s.consensus.GetValidators()
+	
+	// Convertir a formato JSON para la API
+	type ValidatorInfo struct {
+		Address      string   `json:"address"`
+		PubKey       string   `json:"pubKey"`
+		Stake        string   `json:"stake"`
+		Power        int64    `json:"power"`
+		Jailed       bool     `json:"jailed"`
+		CreatedAt    string   `json:"createdAt"`
+		LastActiveAt string   `json:"lastActiveAt"`
+	}
+
+	validatorInfos := make([]ValidatorInfo, 0, len(validators))
+	for _, v := range validators {
+		validatorInfos = append(validatorInfos, ValidatorInfo{
+			Address:      v.Address,
+			PubKey:       fmt.Sprintf("0x%x", v.PubKey),
+			Stake:        v.Stake.String(),
+			Power:        v.Power,
+			Jailed:       v.Jailed,
+			CreatedAt:    v.CreatedAt.Format(time.RFC3339),
+			LastActiveAt: v.LastActiveAt.Format(time.RFC3339),
+		})
+	}
+
+	response := map[string]interface{}{
+		"validators": validatorInfos,
+		"count":      len(validatorInfos),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

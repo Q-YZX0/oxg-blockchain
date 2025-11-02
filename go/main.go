@@ -31,7 +31,7 @@ func main() {
 	defer db.Close()
 
 	// Inicializar motor de ejecución (EVM)
-	evm := execution.NewEVMExecutor(db, cfg.DataDir)
+	evm := execution.NewEVMExecutor(db)
 	
 	// Iniciar ejecutor EVM
 	if err := evm.Start(); err != nil {
@@ -40,7 +40,8 @@ func main() {
 	defer evm.Stop()
 
 	// Inicializar conjunto de validadores
-	minStake := big.NewInt(1000 * 1e18) // 1000 OXG mínimo (con 18 decimales)
+	minStake := big.NewInt(1000) // 1000 OXG mínimo
+	minStake.Mul(minStake, big.NewInt(1e18)) // Multiplicar por 1e18 para decimales
 	maxValidators := 100
 	validators := consensus.NewValidatorSet(db, evm, minStake, maxValidators)
 	
@@ -68,7 +69,7 @@ func main() {
 		PeerID:       cfg.ValidatorAddr,
 	}
 	
-	p2pNetwork, err := network.NewP2PNetwork(ctx, networkConfig, consensusEngine)
+	p2pNetwork, err := network.NewP2PNetwork(ctx, networkConfig, consensusEngine, db)
 	if err != nil {
 		log.Fatalf("Error inicializando red P2P: %v", err)
 	}

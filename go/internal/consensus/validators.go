@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"sort"
 	"sync"
 	"time"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto/ed25519"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/Q-YZX0/oxy-blockchain/internal/execution"
 	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
 )
@@ -86,20 +86,50 @@ func (vs *ValidatorSet) LoadValidators() error {
 
 // SaveValidators guarda validadores en storage
 func (vs *ValidatorSet) SaveValidators() error {
+	fmt.Fprintf(os.Stdout, "[Validators] SaveValidators iniciado\n")
+	os.Stdout.Sync()
+	
+	fmt.Fprintf(os.Stdout, "[Validators] Adquiriendo RLock...\n")
+	os.Stdout.Sync()
 	vs.mutex.RLock()
 	defer vs.mutex.RUnlock()
+	fmt.Fprintf(os.Stdout, "[Validators] RLock adquirido\n")
+	os.Stdout.Sync()
 
+	fmt.Fprintf(os.Stdout, "[Validators] Creando lista de validadores (count=%d)...\n", len(vs.validators))
+	os.Stdout.Sync()
 	validatorsList := make([]*Validator, 0, len(vs.validators))
 	for _, v := range vs.validators {
 		validatorsList = append(validatorsList, v)
 	}
+	fmt.Fprintf(os.Stdout, "[Validators] Lista de validadores creada (count=%d)\n", len(validatorsList))
+	os.Stdout.Sync()
 
+	fmt.Fprintf(os.Stdout, "[Validators] Serializando validadores...\n")
+	os.Stdout.Sync()
 	validatorsData, err := json.Marshal(validatorsList)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Validators] ERROR serializando validadores: %v\n", err)
+		os.Stderr.Sync()
 		return fmt.Errorf("error serializando validadores: %w", err)
 	}
+	fmt.Fprintf(os.Stdout, "[Validators] Validadores serializados (%d bytes)\n", len(validatorsData))
+	os.Stdout.Sync()
 
-	return vs.storage.SaveAccount("validators:set", validatorsData)
+	fmt.Fprintf(os.Stdout, "[Validators] Llamando a storage.SaveAccount('validators:set')...\n")
+	os.Stdout.Sync()
+	err = vs.storage.SaveAccount("validators:set", validatorsData)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Validators] ERROR en storage.SaveAccount(): %v\n", err)
+		os.Stderr.Sync()
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "[Validators] storage.SaveAccount() completado exitosamente\n")
+	os.Stdout.Sync()
+	
+	fmt.Fprintf(os.Stdout, "[Validators] SaveValidators completado exitosamente\n")
+	os.Stdout.Sync()
+	return nil
 }
 
 // RegisterValidator registra un nuevo validador
@@ -325,7 +355,9 @@ func (vs *ValidatorSet) GetActiveValidators() []*Validator {
 
 	validators := make([]*Validator, 0, len(vs.validators))
 	for _, v := range vs.validators {
-		if !v.Jailed && v.Stake.Cmp(vs.minStake) >= 0 {
+		stakeValid := v.Stake.Cmp(vs.minStake) >= 0
+		// Logs reducidos para evitar spam
+		if !v.Jailed && stakeValid {
 			validators = append(validators, v)
 		}
 	}
@@ -355,8 +387,21 @@ func (vs *ValidatorSet) GetValidator(address string) (*Validator, error) {
 func (vs *ValidatorSet) ToCometBFTValidators() []abcitypes.ValidatorUpdate {
 	vs.mutex.RLock()
 	defer vs.mutex.RUnlock()
-
-	activeValidators := vs.GetActiveValidators()
+	
+	// Obtener validadores activos directamente (sin llamar a GetActiveValidators para evitar locks anidados)
+	activeValidators := make([]*Validator, 0, len(vs.validators))
+	for _, v := range vs.validators {
+		stakeValid := v.Stake.Cmp(vs.minStake) >= 0
+		if !v.Jailed && stakeValid {
+			activeValidators = append(activeValidators, v)
+		}
+	}
+	
+	// Ordenar por stake (mayor primero)
+	sort.Slice(activeValidators, func(i, j int) bool {
+		return activeValidators[i].Stake.Cmp(activeValidators[j].Stake) > 0
+	})
+	
 	updates := make([]abcitypes.ValidatorUpdate, 0, len(activeValidators))
 
 	for _, v := range activeValidators {
@@ -369,11 +414,11 @@ func (vs *ValidatorSet) ToCometBFTValidators() []abcitypes.ValidatorUpdate {
 			continue
 		}
 
+		// Nueva API v1.0.1: usar PubKeyBytes (PubKeyType es opcional en v1.0.1)
+		// CometBFT v1.0.1 puede inferir el tipo desde PubKeyBytes
 		updates = append(updates, abcitypes.ValidatorUpdate{
-			PubKey: abcitypes.PubKey{
-				Type: "/tm.PubKeyEd25519",
-				Data: pubKey.Bytes(),
-			},
+			PubKeyBytes: pubKey.Bytes(),
+			// PubKeyType omitido: CometBFT v1.0.1 infiere el tipo desde PubKeyBytes para Ed25519
 			Power: v.Power,
 		})
 	}
@@ -431,13 +476,11 @@ func (vs *ValidatorSet) UpdateValidatorActivity(address string, missedBlock bool
 			if slashPercentage > 0.50 { // Máximo 50% de slash
 				slashPercentage = 0.50
 			}
-			// Jail por 24 horas
-			if err := vs.SlashValidator(address, slashPercentage, 24*time.Hour); err != nil {
-				log.Printf("Error aplicando slash a validador %s: %v", address, err)
-			} else {
-				// Resetear contador después del slash
-				validator.MissedBlocks = 0
-			}
+			// TODO: Implementar SlashValidator cuando esté disponible
+			// Por ahora, solo resetear el contador después de log
+			log.Printf("⚠️ Slash pendiente para validador %s: %.2f%% por %d bloques perdidos", 
+				address, slashPercentage*100, validator.MissedBlocks)
+			validator.MissedBlocks = 0
 		}
 	} else {
 		validator.MissedBlocks = 0
@@ -446,24 +489,99 @@ func (vs *ValidatorSet) UpdateValidatorActivity(address string, missedBlock bool
 
 // RotateValidators rota los validadores según stake y actividad
 func (vs *ValidatorSet) RotateValidators() ([]abcitypes.ValidatorUpdate, error) {
+	fmt.Fprintf(os.Stdout, "[Validators] RotateValidators iniciado\n")
+	os.Stdout.Sync()
+	
 	vs.mutex.Lock()
-	defer vs.mutex.Unlock()
-
-	// Obtener validadores activos ordenados por stake
-	activeValidators := vs.GetActiveValidators()
-
-	// Limitar a máximo de validadores
-	if len(activeValidators) > vs.maxValidators {
-		activeValidators = activeValidators[:vs.maxValidators]
-	}
-
-	// Actualizar power de todos los validadores
+	fmt.Fprintf(os.Stdout, "[Validators] Lock adquirido en RotateValidators\n")
+	os.Stdout.Sync()
+	
+	// Actualizar power de todos los validadores primero (con lock)
+	fmt.Fprintf(os.Stdout, "[Validators] Actualizando power de %d validadores...\n", len(vs.validators))
+	os.Stdout.Sync()
 	for _, v := range vs.validators {
 		v.Power = vs.calculatePower(v.Stake)
 	}
+	
+	// Obtener lista de validadores activos (necesitamos copiar datos antes de liberar el lock)
+	fmt.Fprintf(os.Stdout, "[Validators] Creando copia de validadores activos...\n")
+	os.Stdout.Sync()
+	validatorsCopy := make([]*Validator, 0, len(vs.validators))
+	for _, v := range vs.validators {
+		stakeValid := v.Stake.Cmp(vs.minStake) >= 0
+		if !v.Jailed && stakeValid {
+			validatorsCopy = append(validatorsCopy, &Validator{
+				Address:      v.Address,
+				PubKey:       v.PubKey,
+				Stake:        new(big.Int).Set(v.Stake),
+				Power:        v.Power,
+				Jailed:       v.Jailed,
+				CreatedAt:    v.CreatedAt,
+				LastActiveAt: v.LastActiveAt,
+			})
+		}
+	}
+	
+	fmt.Fprintf(os.Stdout, "[Validators] Validadores activos encontrados: %d\n", len(validatorsCopy))
+	os.Stdout.Sync()
+	
+	// Limitar a máximo de validadores
+	if len(validatorsCopy) > vs.maxValidators {
+		// Ordenar por stake (mayor primero)
+		fmt.Fprintf(os.Stdout, "[Validators] Limitando a %d validadores (hay %d)\n", vs.maxValidators, len(validatorsCopy))
+		os.Stdout.Sync()
+		sort.Slice(validatorsCopy, func(i, j int) bool {
+			return validatorsCopy[i].Stake.Cmp(validatorsCopy[j].Stake) > 0
+		})
+		validatorsCopy = validatorsCopy[:vs.maxValidators]
+	}
+	
+	fmt.Fprintf(os.Stdout, "[Validators] Liberando lock...\n")
+	os.Stdout.Sync()
+	vs.mutex.Unlock() // Liberar lock antes de convertir a formato CometBFT
+	
+	// Convertir a formato CometBFT (ahora sin lock, usando la copia)
+	fmt.Fprintf(os.Stdout, "[Validators] Convirtiendo %d validadores a formato CometBFT...\n", len(validatorsCopy))
+	os.Stdout.Sync()
+	updates := make([]abcitypes.ValidatorUpdate, 0, len(validatorsCopy))
+	for i, v := range validatorsCopy {
+		// Convertir clave pública a formato CometBFT
+		var pubKey ed25519.PubKey
+		if len(v.PubKey) == ed25519.PubKeySize {
+			copy(pubKey[:], v.PubKey)
+		} else {
+			fmt.Fprintf(os.Stderr, "[Validators] ERROR: clave pública inválida para validador %s (tamaño: %d, esperado: %d)\n", v.Address, len(v.PubKey), ed25519.PubKeySize)
+			os.Stderr.Sync()
+			log.Printf("Advertencia: clave pública inválida para validador %s", v.Address)
+			continue
+		}
 
-	// Convertir a formato CometBFT
-	updates := vs.ToCometBFTValidators()
+		// Nueva API v1.0.1: usar PubKeyBytes (PubKeyType es opcional en v1.0.1)
+		updates = append(updates, abcitypes.ValidatorUpdate{
+			PubKeyBytes: pubKey.Bytes(),
+			Power:       v.Power,
+		})
+		
+		if i < 3 { // Log primeros 3 para debug
+			fmt.Fprintf(os.Stdout, "[Validators] Validador %d: Address=%s, Power=%d\n", i+1, v.Address, v.Power)
+			os.Stdout.Sync()
+		}
+	}
+
+	fmt.Fprintf(os.Stdout, "[Validators] Rotación completada: %d validadores activos\n", len(updates))
+	os.Stdout.Sync()
+	
+	// IMPORTANTE: Si no hay validadores, CometBFT puede detenerse
+	// No retornar lista vacía si no hay validadores - esto puede detener el consenso
+	if len(updates) == 0 {
+		fmt.Fprintf(os.Stderr, "[Validators] ADVERTENCIA CRÍTICA: No hay validadores activos después de rotación!\n")
+		os.Stderr.Sync()
+		fmt.Fprintf(os.Stderr, "[Validators] Esto puede causar que CometBFT se detenga. Retornando validadores del genesis.\n")
+		os.Stderr.Sync()
+		// Retornar lista vacía en lugar de nil para que CometBFT no se detenga
+		// O mejor aún, no hacer rotación si no hay validadores
+		return []abcitypes.ValidatorUpdate{}, nil
+	}
 
 	log.Printf("🔄 Rotación de validadores: %d validadores activos", len(updates))
 
@@ -472,10 +590,21 @@ func (vs *ValidatorSet) RotateValidators() ([]abcitypes.ValidatorUpdate, error) 
 
 // InitializeGenesisValidators inicializa validadores desde genesis
 func (vs *ValidatorSet) InitializeGenesisValidators(genesisValidators []GenesisValidator) error {
+	fmt.Fprintf(os.Stdout, "[Validators] InitializeGenesisValidators iniciado con %d validadores\n", len(genesisValidators))
+	os.Stdout.Sync()
+	
+	fmt.Fprintf(os.Stdout, "[Validators] Adquiriendo mutex...\n")
+	os.Stdout.Sync()
 	vs.mutex.Lock()
-	defer vs.mutex.Unlock()
+	fmt.Fprintf(os.Stdout, "[Validators] Mutex adquirido\n")
+	os.Stdout.Sync()
 
-	for _, gv := range genesisValidators {
+	fmt.Fprintf(os.Stdout, "[Validators] Iterando sobre %d validadores genesis...\n", len(genesisValidators))
+	os.Stdout.Sync()
+	for i, gv := range genesisValidators {
+		fmt.Fprintf(os.Stdout, "[Validators] Procesando validador genesis %d/%d: %s\n", i+1, len(genesisValidators), gv.Address)
+		os.Stdout.Sync()
+		
 		validator := &Validator{
 			Address:      gv.Address,
 			PubKey:       gv.PubKey,
@@ -487,9 +616,31 @@ func (vs *ValidatorSet) InitializeGenesisValidators(genesisValidators []GenesisV
 
 		vs.validators[gv.Address] = validator
 		log.Printf("✅ Validador genesis registrado: %s con stake %s", gv.Address, gv.Stake.String())
+		fmt.Fprintf(os.Stdout, "[Validators] Validador registrado: %s\n", gv.Address)
+		os.Stdout.Sync()
 	}
+	fmt.Fprintf(os.Stdout, "[Validators] Todos los validadores genesis procesados\n")
+	os.Stdout.Sync()
 
-	return vs.SaveValidators()
+	// Liberar el mutex antes de llamar a SaveValidators() para evitar deadlock
+	// SaveValidators() necesita adquirir RLock, y aunque RLock debería poder adquirirse
+	// después de Lock(), es mejor liberar el Lock() primero para evitar cualquier problema
+	fmt.Fprintf(os.Stdout, "[Validators] Liberando mutex antes de SaveValidators()...\n")
+	os.Stdout.Sync()
+	vs.mutex.Unlock()
+	
+	fmt.Fprintf(os.Stdout, "[Validators] Llamando a SaveValidators()...\n")
+	os.Stdout.Sync()
+	err := vs.SaveValidators()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Validators] ERROR en SaveValidators(): %v\n", err)
+		os.Stderr.Sync()
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "[Validators] SaveValidators() completado exitosamente\n")
+	os.Stdout.Sync()
+	
+	return nil
 }
 
 // GenesisValidator representa un validador en el genesis

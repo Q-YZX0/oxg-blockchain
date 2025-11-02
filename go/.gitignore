@@ -23,8 +23,14 @@ vendor/
 data/
 test-data/
 test_data/
+test_data_*/
+test_data_*_*/
 tmp/
 /tmp/
+test/
+cmd/
+internal/consensus/data/
+internal/consensus/test_data*/
 
 # Archivos temporales de tests
 *.log

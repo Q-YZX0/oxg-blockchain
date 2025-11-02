@@ -42,16 +42,25 @@ func VerifyTransactionSignature(txData map[string]interface{}) (common.Address, 
 	}
 
 	// Ajustar V (último byte) para recuperación de clave pública
-	// V debe ser 27 o 28 para Ethereum, pero puede ser ajustado
+	// crypto.Sign() retorna V en rango 0-1, crypto.SigToPub espera 27-28
 	v := signatureBytes[64]
+	// Normalizar V: crypto.Sign() retorna 0-1, pero SigToPub necesita 27-28
 	if v < 27 {
-		v += 27
+		// Si V está en 0-1, ajustarlo a 27-28
+		v = v + 27
 	}
 
-	// Recuperar clave pública desde la firma
-	pubKey, err := crypto.SigToPub(hashBytes, append(signatureBytes[:64], v))
+	// Recuperar clave pública desde la firma usando Ecrecover (más directo)
+	// Ecrecover retorna la clave pública sin necesidad de ajustar V manualmente
+	pubKeyBytes, err := crypto.Ecrecover(hashBytes, signatureBytes)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("error recuperando clave pública: %w", err)
+	}
+	
+	// Convertir bytes de clave pública a *ecdsa.PublicKey
+	pubKey, err := crypto.UnmarshalPubkey(pubKeyBytes)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("error parseando clave pública: %w", err)
 	}
 
 	// Derivar dirección desde la clave pública
@@ -71,16 +80,26 @@ func VerifyTransactionSignatureFromBytes(txHash []byte, signature []byte, fromAd
 		return fmt.Errorf("firma inválida: debe tener 65 bytes, tiene %d", len(signature))
 	}
 
-	// Ajustar V
+	// Ajustar V (último byte) para recuperación de clave pública
+	// crypto.Sign() retorna V en rango 0-1, crypto.SigToPub espera 27-28
 	v := signature[64]
+	// Normalizar V: crypto.Sign() retorna 0-1, pero SigToPub necesita 27-28
 	if v < 27 {
-		v += 27
+		// Si V está en 0-1, ajustarlo a 27-28
+		v = v + 27
 	}
 
-	// Recuperar clave pública
-	pubKey, err := crypto.SigToPub(txHash, append(signature[:64], v))
+	// Recuperar clave pública desde la firma usando Ecrecover (más directo)
+	// Ecrecover retorna la clave pública sin necesidad de ajustar V manualmente
+	pubKeyBytes, err := crypto.Ecrecover(txHash, signature)
 	if err != nil {
 		return fmt.Errorf("error recuperando clave pública: %w", err)
+	}
+	
+	// Convertir bytes de clave pública a *ecdsa.PublicKey
+	pubKey, err := crypto.UnmarshalPubkey(pubKeyBytes)
+	if err != nil {
+		return fmt.Errorf("error parseando clave pública: %w", err)
 	}
 
 	// Derivar dirección

@@ -108,49 +108,89 @@ func (h *HealthChecker) SetPeers(count int) {
 // SetStorageHealth actualiza el estado del storage
 func (h *HealthChecker) SetStorageHealth(healthy bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.storageHealthy = healthy
+	// Actualizar componente sin adquirir el lock de nuevo (ya lo tenemos)
+	name := "storage"
 	if healthy {
-		h.UpdateComponent("storage", "ok", "Storage operativo")
+		h.components[name] = ComponentStatus{
+			Status:    "ok",
+			Message:   "Storage operativo",
+			LastCheck: time.Now(),
+		}
 	} else {
-		h.UpdateComponent("storage", "error", "Storage no disponible")
+		h.components[name] = ComponentStatus{
+			Status:    "error",
+			Message:   "Storage no disponible",
+			LastCheck: time.Now(),
+		}
 	}
+	h.mu.Unlock()
 }
 
 // SetEVMHealth actualiza el estado del EVM
 func (h *HealthChecker) SetEVMHealth(healthy bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.evmHealthy = healthy
+	// Actualizar componente sin adquirir el lock de nuevo (ya lo tenemos)
+	name := "evm"
 	if healthy {
-		h.UpdateComponent("evm", "ok", "EVM operativo")
+		h.components[name] = ComponentStatus{
+			Status:    "ok",
+			Message:   "EVM operativo",
+			LastCheck: time.Now(),
+		}
 	} else {
-		h.UpdateComponent("evm", "error", "EVM no disponible")
+		h.components[name] = ComponentStatus{
+			Status:    "error",
+			Message:   "EVM no disponible",
+			LastCheck: time.Now(),
+		}
 	}
+	h.mu.Unlock()
 }
 
 // SetConsensusHealth actualiza el estado del consenso
 func (h *HealthChecker) SetConsensusHealth(healthy bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.consensusHealthy = healthy
+	// Actualizar componente sin adquirir el lock de nuevo (ya lo tenemos)
+	name := "consensus"
 	if healthy {
-		h.UpdateComponent("consensus", "ok", "Consenso operativo")
+		h.components[name] = ComponentStatus{
+			Status:    "ok",
+			Message:   "Consenso operativo",
+			LastCheck: time.Now(),
+		}
 	} else {
-		h.UpdateComponent("consensus", "error", "Consenso no disponible")
+		h.components[name] = ComponentStatus{
+			Status:    "error",
+			Message:   "Consenso no disponible",
+			LastCheck: time.Now(),
+		}
 	}
+	h.mu.Unlock()
 }
 
 // SetMeshHealth actualiza el estado de la mesh network
 func (h *HealthChecker) SetMeshHealth(healthy bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.meshHealthy = healthy
+	// Actualizar componente sin adquirir el lock de nuevo (ya lo tenemos)
+	name := "mesh"
 	if healthy {
-		h.UpdateComponent("mesh", "ok", "Mesh network operativa")
+		h.components[name] = ComponentStatus{
+			Status:    "ok",
+			Message:   "Mesh network operativa",
+			LastCheck: time.Now(),
+		}
 	} else {
-		h.UpdateComponent("mesh", "warning", "Mesh network degradada")
+		h.components[name] = ComponentStatus{
+			Status:    "warning",
+			Message:   "Mesh network degradada",
+			LastCheck: time.Now(),
+		}
 	}
+	h.mu.Unlock()
 }
 
 // IsHealthy retorna si el nodo está saludable

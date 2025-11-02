@@ -2,7 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -16,21 +19,54 @@ type BlockchainDB struct {
 // NewBlockchainDB crea una nueva instancia de la base de datos
 func NewBlockchainDB(dataDir string) (*BlockchainDB, error) {
 	dbPath := filepath.Join(dataDir, "blockchain.db")
+	fmt.Fprintf(os.Stdout, "[Storage] Abriendo LevelDB en: %s\n", dbPath)
+	os.Stdout.Sync()
 	
+	fmt.Fprintf(os.Stdout, "[Storage] Llamando a leveldb.OpenFile()...\n")
+	os.Stdout.Sync()
 	db, err := leveldb.OpenFile(dbPath, nil)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Storage] ERROR abriendo LevelDB: %v\n", err)
+		os.Stderr.Sync()
 		return nil, fmt.Errorf("error abriendo base de datos: %w", err)
 	}
 
+	fmt.Fprintf(os.Stdout, "[Storage] LevelDB abierto exitosamente\n")
+	os.Stdout.Sync()
 	return &BlockchainDB{
 		db:      db,
 		dataDir: dataDir,
 	}, nil
 }
 
-// Close cierra la base de datos
+// Close cierra la base de datos y espera a que las goroutines terminen
 func (b *BlockchainDB) Close() error {
-	return b.db.Close()
+	if b.db == nil {
+		return nil
+	}
+	
+	// Cerrar la base de datos
+	// LevelDB.Close() debería detener todas las goroutines de background
+	// (compaction, memory pool drain, etc.)
+	err := b.db.Close()
+	b.db = nil
+	
+	// Dar tiempo para que las goroutines de LevelDB terminen
+	// LevelDB tiene goroutines de compaction (mCompaction, tCompaction) y 
+	// memory pool drain (mpoolDrain) que necesitan tiempo para terminar
+	// Nota: Estas goroutines pueden seguir ejecutándose después de Close()
+	// pero se cerrarán cuando el proceso termine (comportamiento conocido de LevelDB)
+	time.Sleep(200 * time.Millisecond)
+	
+	// Forzar garbage collection para ayudar a liberar recursos
+	runtime.GC()
+	
+	return err
+}
+
+// GetDataDir retorna el directorio de datos
+func (b *BlockchainDB) GetDataDir() string {
+	return b.dataDir
 }
 
 // SaveBlock guarda un bloque en la base de datos
