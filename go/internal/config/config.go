@@ -20,6 +20,10 @@ type Config struct {
 	// Configuración de red mesh
 	MeshEndpoint string
 
+	// Configuración de peers P2P (CometBFT)
+	PersistentPeers string // Formato: "nodeid@host:port,nodeid2@host2:port2"
+	Seeds           string // Formato: "nodeid@host:port,nodeid2@host2:port2"
+
 	// Configuración de logging
 	LogLevel string
 
@@ -44,8 +48,10 @@ func LoadConfig() *Config {
 		ChainID:        getEnv("OXY_CHAIN_ID", "oxy-gen-chain"),
 		ValidatorAddr:  getEnv("OXY_VALIDATOR_ADDR", ""),
 		ValidatorKey:   getEnv("OXY_VALIDATOR_KEY", ""),
-		MeshEndpoint:   getEnv("OXY_MESH_ENDPOINT", "ws://localhost:3001"),
-		LogLevel:       getEnv("OXY_LOG_LEVEL", "info"),
+		MeshEndpoint:    getEnv("OXY_MESH_ENDPOINT", "ws://localhost:3001"),
+		PersistentPeers: getEnv("OXY_PERSISTENT_PEERS", ""),
+		Seeds:           getEnv("OXY_SEEDS", ""),
+		LogLevel:        getEnv("OXY_LOG_LEVEL", "info"),
 		CometBFTHome:   getEnv("COMETBFT_HOME", filepath.Join(dataDir, "cometbft")),
 		EVMoneTrace:    getEnvBool("EVMONE_TRACE", false),
 		APIEnabled:     getEnvBool("BLOCKCHAIN_API_ENABLED", true),

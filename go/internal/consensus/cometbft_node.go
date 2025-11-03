@@ -49,6 +49,20 @@ func NewCometBFTNode(
 	// Configurar para crear bloques vacíos automáticamente (importante para testnet)
 	cometConfig.Consensus.CreateEmptyBlocks = true
 	cometConfig.Consensus.CreateEmptyBlocksInterval = 1 * time.Second // Crear bloques vacíos cada segundo
+	
+	// Configurar peers persistentes si se proporcionan
+	if persistentPeers := os.Getenv("OXY_PERSISTENT_PEERS"); persistentPeers != "" {
+		cometConfig.P2P.PersistentPeers = persistentPeers
+		fmt.Fprintf(os.Stdout, "[CometBFT] PersistentPeers configurados: %s\n", persistentPeers)
+		os.Stdout.Sync()
+	}
+	
+	// Configurar seeds si se proporcionan
+	if seeds := os.Getenv("OXY_SEEDS"); seeds != "" {
+		cometConfig.P2P.Seeds = seeds
+		fmt.Fprintf(os.Stdout, "[CometBFT] Seeds configurados: %s\n", seeds)
+		os.Stdout.Sync()
+	}
 
 	// Asegurar que el directorio existe
 	if err := os.MkdirAll(cometConfig.RootDir, 0755); err != nil {
@@ -383,14 +397,12 @@ func NewCometBFTNode(
 	fmt.Fprintf(os.Stdout, "[CometBFT] App creator creado\n")
 	os.Stdout.Sync()
 
-	// Crear logger para CometBFT (usar NopLogger para reducir logs de bloques)
-	fmt.Fprintf(os.Stdout, "[CometBFT] Creando logger para CometBFT...\n")
-	os.Stdout.Sync()
-	// Usar NopLogger para eliminar logs detallados de CometBFT (bloques, consensus, etc.)
-	// Los logs importantes de nuestra aplicación ABCI seguirán apareciendo
-	cometLogger := cometlog.NewNopLogger()
-	fmt.Fprintf(os.Stdout, "[CometBFT] Logger creado (NopLogger: logs de CometBFT silenciados)\n")
-	os.Stdout.Sync()
+    // Crear logger para CometBFT (habilitar logs para diagnóstico)
+    fmt.Fprintf(os.Stdout, "[CometBFT] Creando logger para CometBFT (TMLogger con stdout)...\n")
+    os.Stdout.Sync()
+    cometLogger := cometlog.NewTMLogger(cometlog.NewSyncWriter(os.Stdout))
+    fmt.Fprintf(os.Stdout, "[CometBFT] Logger creado (TMLogger: logs de consenso habilitados)\n")
+    os.Stdout.Sync()
 
 	// Antes de crear el nodo, SIEMPRE eliminar bases de datos si hay un marcador o si el genesis fue modificado
 	// Esto es crítico para evitar hash mismatch después de modificar el genesis
@@ -668,6 +680,30 @@ func configureCometBFTForEmptyBlocks(cfg *cometcfg.Config) error {
 	// Configurar para crear bloques vacíos automáticamente
 	cfg.Consensus.CreateEmptyBlocks = true
 	cfg.Consensus.CreateEmptyBlocksInterval = 1 * time.Second // Crear bloques vacíos cada segundo
+
+    // Ajustar timeouts de consenso para entornos de un solo validador
+    // Valores conservadores para que el pipeline no se quede esperando innecesariamente
+    cfg.Consensus.TimeoutPropose = 1 * time.Second
+    cfg.Consensus.TimeoutProposeDelta = 200 * time.Millisecond
+    cfg.Consensus.TimeoutPrevote = 1 * time.Second
+    cfg.Consensus.TimeoutPrevoteDelta = 200 * time.Millisecond
+    cfg.Consensus.TimeoutPrecommit = 1 * time.Second
+    cfg.Consensus.TimeoutPrecommitDelta = 200 * time.Millisecond
+    cfg.Consensus.TimeoutCommit = 1 * time.Second
+
+	// Configurar peers persistentes si se proporcionan
+	if persistentPeers := os.Getenv("OXY_PERSISTENT_PEERS"); persistentPeers != "" {
+		cfg.P2P.PersistentPeers = persistentPeers
+		fmt.Fprintf(os.Stdout, "[CometBFT] PersistentPeers configurados: %s\n", persistentPeers)
+		os.Stdout.Sync()
+	}
+	
+	// Configurar seeds si se proporcionan
+	if seeds := os.Getenv("OXY_SEEDS"); seeds != "" {
+		cfg.P2P.Seeds = seeds
+		fmt.Fprintf(os.Stdout, "[CometBFT] Seeds configurados: %s\n", seeds)
+		os.Stdout.Sync()
+	}
 
 	// Guardar configuración actualizada
 	configFile := filepath.Join(cfg.RootDir, "config", "config.toml")

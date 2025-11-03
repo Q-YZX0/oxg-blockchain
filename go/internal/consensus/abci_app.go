@@ -8,38 +8,38 @@ import (
 	"os"
 	"time"
 
+	cryptosigner "github.com/Q-YZX0/oxy-blockchain/internal/crypto"
+	execution "github.com/Q-YZX0/oxy-blockchain/internal/execution"
+	"github.com/Q-YZX0/oxy-blockchain/internal/logger"
+	"github.com/Q-YZX0/oxy-blockchain/internal/metrics"
+	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	execution "github.com/Q-YZX0/oxy-blockchain/internal/execution"
-	cryptosigner "github.com/Q-YZX0/oxy-blockchain/internal/crypto"
-	"github.com/Q-YZX0/oxy-blockchain/internal/logger"
-	"github.com/Q-YZX0/oxy-blockchain/internal/storage"
-	"github.com/Q-YZX0/oxy-blockchain/internal/metrics"
 )
 
 // ABCIApp implementa la interfaz ABCI de CometBFT
 // Esta es la aplicación que corre sobre CometBFT
 type ABCIApp struct {
-	storage            *storage.BlockchainDB
-	executor           *execution.EVMExecutor
-	validators         *ValidatorSet
-	state              *AppState
-	currentBlockHeight uint64
-	currentBlockTime   int64
-	currentBlockTxs    []*Transaction
+	storage              *storage.BlockchainDB
+	executor             *execution.EVMExecutor
+	validators           *ValidatorSet
+	state                *AppState
+	currentBlockHeight   uint64
+	currentBlockTime     int64
+	currentBlockTxs      []*Transaction
 	currentBlockReceipts []*TransactionReceipt
-	chainID            string
-	getMempool         func() []*Transaction // Función para obtener el mempool local
-	clearMempoolTx     func(string)          // Función para limpiar una transacción del mempool
-	metrics            *metrics.Metrics      // Referencia a las métricas (opcional)
+	chainID              string
+	getMempool           func() []*Transaction // Función para obtener el mempool local
+	clearMempoolTx       func(string)          // Función para limpiar una transacción del mempool
+	metrics              *metrics.Metrics      // Referencia a las métricas (opcional)
 }
 
 // AppState mantiene el estado de la aplicación
 type AppState struct {
-	Height      int64
-	AppHash     []byte
-	Validators  []abcitypes.ValidatorUpdate
+	Height     int64
+	AppHash    []byte
+	Validators []abcitypes.ValidatorUpdate
 }
 
 // NewABCIApp crea una nueva aplicación ABCI
@@ -54,10 +54,10 @@ func NewABCIApp(storage *storage.BlockchainDB, executor *execution.EVMExecutor, 
 			AppHash:    make([]byte, 32),
 			Validators: []abcitypes.ValidatorUpdate{},
 		},
-		currentBlockTxs:     make([]*Transaction, 0),
+		currentBlockTxs:      make([]*Transaction, 0),
 		currentBlockReceipts: make([]*TransactionReceipt, 0),
-		getMempool:          nil, // Se establecerá después
-		clearMempoolTx:      nil, // Se establecerá después
+		getMempool:           nil, // Se establecerá después
+		clearMempoolTx:       nil, // Se establecerá después
 	}
 }
 
@@ -92,7 +92,7 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 	fmt.Fprintf(os.Stdout, "[ABCI] InitChain iniciado\n")
 	os.Stdout.Sync()
 	logger.Info("Inicializando blockchain")
-	
+
 	// Cargar validadores guardados
 	fmt.Fprintf(os.Stdout, "[ABCI] Verificando validadores...\n")
 	os.Stdout.Sync()
@@ -102,13 +102,13 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 		if err := app.validators.LoadValidators(); err != nil {
 			logger.Warn("Error cargando validadores: " + err.Error())
 		}
-		
+
 		fmt.Fprintf(os.Stdout, "[ABCI] Verificando validadores activos...\n")
 		os.Stdout.Sync()
 		activeValidators := app.validators.GetActiveValidators()
 		fmt.Fprintf(os.Stdout, "[ABCI] Validadores activos: %d\n", len(activeValidators))
 		os.Stdout.Sync()
-		
+
 		// Usar validadores del set en lugar de los del genesis
 		// Si no hay validadores guardados, usar los del genesis
 		if len(activeValidators) == 0 {
@@ -120,22 +120,22 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 				// Extraer dirección desde la clave pública (simplificado)
 				// Nueva API v1.0.1: usar PubKeyBytes en lugar de PubKey.Data
 				address := common.BytesToAddress(v.PubKeyBytes).Hex()
-				
+
 				// Convertir power a stake usando big.Int para evitar overflow
 				powerBig := big.NewInt(int64(v.Power))
 				multiplier := big.NewInt(1e18)
 				stake := new(big.Int).Mul(powerBig, multiplier)
-				
+
 				genesisValidators = append(genesisValidators, GenesisValidator{
 					Address: address,
 					PubKey:  v.PubKeyBytes,
 					Stake:   stake,
 				})
 			}
-			
+
 			fmt.Fprintf(os.Stdout, "[ABCI] Validadores genesis convertidos: %d\n", len(genesisValidators))
 			os.Stdout.Sync()
-			
+
 			if err := app.validators.InitializeGenesisValidators(genesisValidators); err != nil {
 				fmt.Fprintf(os.Stderr, "[ABCI] ERROR inicializando validadores genesis: %v\n", err)
 				os.Stderr.Sync()
@@ -145,10 +145,10 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 				os.Stdout.Sync()
 			}
 		}
-		
+
 		fmt.Fprintf(os.Stdout, "[ABCI] Obteniendo validadores actualizados...\n")
 		os.Stdout.Sync()
-		
+
 		// Si el genesis ya tiene validadores, usar los del genesis directamente (vienen con formato correcto)
 		// Estos validadores ya tienen el formato correcto de CometBFT y no causarán error de encoding
 		if len(req.Validators) > 0 {
@@ -163,11 +163,11 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 			allValidators := app.validators.GetValidators()
 			fmt.Fprintf(os.Stdout, "[ABCI] Total validadores en set: %d\n", len(allValidators))
 			os.Stdout.Sync()
-			
+
 			activeValidators = app.validators.GetActiveValidators()
 			fmt.Fprintf(os.Stdout, "[ABCI] Validadores activos: %d\n", len(activeValidators))
 			os.Stdout.Sync()
-			
+
 			app.state.Validators = app.validators.ToCometBFTValidators()
 			fmt.Fprintf(os.Stdout, "[ABCI] Validadores actualizados obtenidos: %d\n", len(app.state.Validators))
 			os.Stdout.Sync()
@@ -178,7 +178,7 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 		// Fallback: usar validadores del genesis directamente
 		app.state.Validators = req.Validators
 	}
-	
+
 	fmt.Fprintf(os.Stdout, "[ABCI] Preparando respuesta InitChain...\n")
 	os.Stdout.Sync()
 	response := &abcitypes.InitChainResponse{
@@ -193,53 +193,54 @@ func (app *ABCIApp) InitChain(ctx context.Context, req *abcitypes.InitChainReque
 // FinalizeBlock procesa todas las transacciones del bloque y finaliza el bloque
 // Reemplaza BeginBlock, DeliverTx y EndBlock en la nueva API v1.0.1
 func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBlockRequest) (*abcitypes.FinalizeBlockResponse, error) {
-		fmt.Fprintf(os.Stdout, "[ABCI] FinalizeBlock llamado: height=%d, txs=%d\n", req.Height, len(req.Txs))
+	fmt.Fprintf(os.Stdout, "[ABCI] FinalizeBlock llamado: height=%d, txs=%d\n", req.Height, len(req.Txs))
+	os.Stdout.Sync()
+	logger.Info(fmt.Sprintf("Finalizando bloque: height=%d, txs=%d", req.Height, len(req.Txs)))
+	startFinalize := time.Now()
+
+	// Log detallado de transacciones recibidas
+	if len(req.Txs) > 0 {
+		fmt.Fprintf(os.Stdout, "[ABCI] Procesando %d transacciones en bloque %d\n", len(req.Txs), req.Height)
 		os.Stdout.Sync()
-		logger.Info(fmt.Sprintf("Finalizando bloque: height=%d, txs=%d", req.Height, len(req.Txs)))
-		
-		// Log detallado de transacciones recibidas
-		if len(req.Txs) > 0 {
-			fmt.Fprintf(os.Stdout, "[ABCI] Procesando %d transacciones en bloque %d\n", len(req.Txs), req.Height)
-			os.Stdout.Sync()
-		} else {
-			fmt.Fprintf(os.Stdout, "[ABCI] Bloque %d sin transacciones\n", req.Height)
-			os.Stdout.Sync()
-		}
-	
+	} else {
+		fmt.Fprintf(os.Stdout, "[ABCI] Bloque %d sin transacciones\n", req.Height)
+		os.Stdout.Sync()
+	}
+
 	// Guardar altura y timestamp actuales para uso en ejecución EVM
 	app.state.Height = req.Height
 	app.currentBlockHeight = uint64(req.Height)
 	app.currentBlockTime = req.Time.Unix()
-	
+
 	// Limpiar transacciones del bloque anterior
 	app.currentBlockTxs = make([]*Transaction, 0)
 	app.currentBlockReceipts = make([]*TransactionReceipt, 0)
-	
+
 	// Procesar todas las transacciones del bloque
 	txResults := make([]*abcitypes.ExecTxResult, 0, len(req.Txs))
-	
+
 	// Establecer información del bloque actual en el ejecutor
 	app.executor.SetCurrentBlockInfo(uint64(req.Height), app.currentBlockTime)
-	
-		// Procesar cada transacción
-		for i, txBytes := range req.Txs {
-			fmt.Fprintf(os.Stdout, "[ABCI] Procesando transacción %d de %d (bytes: %d)\n", i+1, len(req.Txs), len(txBytes))
-			os.Stdout.Sync()
-			
-			// Decodificar transacción
-			var tx Transaction
-			if err := json.Unmarshal(txBytes, &tx); err != nil {
-				fmt.Fprintf(os.Stderr, "[ABCI] ERROR decodificando transacción %d: %v\n", i+1, err)
-				os.Stderr.Sync()
-				txResults = append(txResults, &abcitypes.ExecTxResult{
-					Code: 1,
-					Log:  fmt.Sprintf("Error decodificando transacción: %v", err),
-				})
-				continue
-			}
-			
-			fmt.Fprintf(os.Stdout, "[ABCI] Transacción decodificada: hash=%s, from=%s, to=%s\n", tx.Hash, tx.From, tx.To)
-			os.Stdout.Sync()
+
+	// Procesar cada transacción
+	for i, txBytes := range req.Txs {
+		fmt.Fprintf(os.Stdout, "[ABCI] Procesando transacción %d de %d (bytes: %d)\n", i+1, len(req.Txs), len(txBytes))
+		os.Stdout.Sync()
+
+		// Decodificar transacción
+		var tx Transaction
+		if err := json.Unmarshal(txBytes, &tx); err != nil {
+			fmt.Fprintf(os.Stderr, "[ABCI] ERROR decodificando transacción %d: %v\n", i+1, err)
+			os.Stderr.Sync()
+			txResults = append(txResults, &abcitypes.ExecTxResult{
+				Code: 1,
+				Log:  fmt.Sprintf("Error decodificando transacción: %v", err),
+			})
+			continue
+		}
+
+		fmt.Fprintf(os.Stdout, "[ABCI] Transacción decodificada: hash=%s, from=%s, to=%s\n", tx.Hash, tx.From, tx.To)
+		os.Stdout.Sync()
 
 		// Validar transacción básica
 		fmt.Fprintf(os.Stdout, "[ABCI] Validando transacción: hash=%s\n", tx.Hash)
@@ -299,12 +300,12 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 			os.Stderr.Sync()
 			execTxResult.Code = 4
 			execTxResult.Log = result.Error
-			
+
 			// Actualizar métricas para transacción rechazada
 			if app.metrics != nil {
 				app.metrics.IncrementRejectedTransactions()
 			}
-			
+
 			// IMPORTANTE: Remover transacción del mempool incluso si falla
 			// Esto evita que se reintente infinitamente
 			if app.clearMempoolTx != nil {
@@ -312,7 +313,7 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 				fmt.Fprintf(os.Stdout, "[ABCI] Transacción fallida removida del mempool: hash=%s\n", tx.Hash)
 				os.Stdout.Sync()
 			}
-			
+
 			// Guardar transacción fallida en storage para referencia
 			// (opcional: solo si quieres trackear transacciones fallidas)
 			// txData, _ := json.Marshal(tx)
@@ -321,7 +322,7 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 			// Guardar transacción solo si fue exitosa
 			fmt.Fprintf(os.Stdout, "[ABCI] Transacción exitosa, guardando en storage: hash=%s\n", tx.Hash)
 			os.Stdout.Sync()
-			
+
 			txData, _ := json.Marshal(tx)
 			if err := app.storage.SaveTransaction(tx.Hash, txData); err != nil {
 				fmt.Fprintf(os.Stderr, "[ABCI] ERROR guardando transacción en storage: %v\n", err)
@@ -330,23 +331,23 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 				fmt.Fprintf(os.Stdout, "[ABCI] Transacción guardada exitosamente en storage: hash=%s\n", tx.Hash)
 				os.Stdout.Sync()
 			}
-			
+
 			// Actualizar métricas para transacción exitosa
 			if app.metrics != nil {
 				app.metrics.IncrementTransactions()
 				app.metrics.AddGasUsed(result.GasUsed)
 			}
-			
+
 			// Agregar transacción al bloque actual
 			app.currentBlockTxs = append(app.currentBlockTxs, &tx)
-			
+
 			// Limpiar transacción del mempool local después de procesarla exitosamente
 			if app.clearMempoolTx != nil {
 				app.clearMempoolTx(tx.Hash)
 				fmt.Fprintf(os.Stdout, "[ABCI] Transacción exitosa removida del mempool: hash=%s\n", tx.Hash)
 				os.Stdout.Sync()
 			}
-			
+
 			// Crear receipt de la transacción
 			receipt := &TransactionReceipt{
 				TransactionHash: tx.Hash,
@@ -356,13 +357,13 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 				Logs:            convertLogs(result.Logs),
 				Error:           result.Error,
 			}
-			
+
 			app.currentBlockReceipts = append(app.currentBlockReceipts, receipt)
 		}
-		
+
 		txResults = append(txResults, execTxResult)
 	}
-	
+
 	// Rotar validadores periódicamente (cada 100 bloques)
 	// IMPORTANTE: Solo retornar ValidatorUpdates si hay cambios REALES
 	// CometBFT puede detenerse si recibe validadores sin cambios
@@ -375,7 +376,7 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 			currentValidators := app.validators.ToCometBFTValidators()
 			fmt.Fprintf(os.Stdout, "[ABCI] Validadores actuales: %d\n", len(currentValidators))
 			os.Stdout.Sync()
-			
+
 			// OPTIMIZACIÓN: Si solo hay 1 validador, no tiene sentido rotar
 			// Solo retornar updates si hay cambios reales (nuevos validadores, power diferente, etc.)
 			if len(currentValidators) <= 1 {
@@ -412,10 +413,14 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "[ABCI] ADVERTENCIA: validators es nil en bloque %d\n", req.Height)
-			os.Stderr.Sync()
+			os.Stdout.Sync()
 		}
 	}
-	
+
+	dur := time.Since(startFinalize)
+	fmt.Fprintf(os.Stdout, "[ABCI] FinalizeBlock completado: height=%d, txs=%d, duración=%s\n", req.Height, len(req.Txs), dur)
+	os.Stdout.Sync()
+
 	return &abcitypes.FinalizeBlockResponse{
 		TxResults:        txResults,
 		ValidatorUpdates: validatorUpdates,
@@ -424,14 +429,19 @@ func (app *ABCIApp) FinalizeBlock(ctx context.Context, req *abcitypes.FinalizeBl
 
 // Commit confirma el bloque y retorna el AppHash (nueva API v1.0.1)
 func (app *ABCIApp) Commit(ctx context.Context, req *abcitypes.CommitRequest) (*abcitypes.CommitResponse, error) {
+	fmt.Fprintf(os.Stdout, "[ABCI] Commit llamado: currentBlockHeight=%d\n", app.currentBlockHeight)
+	os.Stdout.Sync()
+
 	// Guardar estado EVM completo (esto persiste el StateDB)
 	if err := app.executor.SaveState(); err != nil {
+		fmt.Fprintf(os.Stderr, "[ABCI] ERROR guardando estado EVM: %v\n", err)
+		os.Stderr.Sync()
 		logger.Warn("Error guardando estado EVM: " + err.Error())
 	}
-	
+
 	// Obtener root hash del StateDB
 	stateRoot := app.executor.GetStateManager().GetRootHash()
-	
+
 	// Si no hay root, usar hash del estado de la aplicación
 	var appHash []byte
 	if stateRoot != (common.Hash{}) {
@@ -441,21 +451,21 @@ func (app *ABCIApp) Commit(ctx context.Context, req *abcitypes.CommitRequest) (*
 		hash := crypto.Keccak256(stateData)
 		appHash = hash[:32]
 	}
-	
+
 	// Guardar metadata del estado
 	stateData, _ := json.Marshal(map[string]interface{}{
-		"root":      stateRoot.Hex(),
-		"height":    app.state.Height,
+		"root":     stateRoot.Hex(),
+		"height":   app.state.Height,
 		"app_hash": common.BytesToHash(appHash).Hex(),
 	})
 	app.storage.SaveState(stateData)
-	
+
 	// Guardar bloque completo
 	if app.currentBlockHeight > 0 {
 		if err := app.saveBlock(appHash); err != nil {
 			logger.Warn("Error guardando bloque: " + err.Error())
 		}
-		
+
 		// Actualizar métricas para bloque procesado
 		if app.metrics != nil {
 			app.metrics.IncrementBlocks()
@@ -467,10 +477,13 @@ func (app *ABCIApp) Commit(ctx context.Context, req *abcitypes.CommitRequest) (*
 			}
 		}
 	}
-	
+
 	// Actualizar AppHash con root del StateDB
 	copy(app.state.AppHash, appHash)
-	
+
+	fmt.Fprintf(os.Stdout, "[ABCI] Commit completado: height=%d, appHash=%s\n", app.currentBlockHeight, common.BytesToHash(appHash).Hex()[:16])
+	os.Stdout.Sync()
+
 	// Nota: En la nueva API v1.0.1, CommitResponse ya no tiene Data (AppHash se maneja de otra forma)
 	return &abcitypes.CommitResponse{
 		RetainHeight: 0,
@@ -481,7 +494,7 @@ func (app *ABCIApp) Commit(ctx context.Context, req *abcitypes.CommitRequest) (*
 func (app *ABCIApp) saveBlock(blockHash []byte) error {
 	// Calcular hash del bloque
 	blockHashStr := common.BytesToHash(blockHash).Hex()
-	
+
 	// Obtener hash del bloque padre
 	parentHash := ""
 	if app.currentBlockHeight > 0 {
@@ -493,7 +506,7 @@ func (app *ABCIApp) saveBlock(blockHash []byte) error {
 			}
 		}
 	}
-	
+
 	// Crear bloque completo
 	block := &Block{
 		Header: BlockHeader{
@@ -506,25 +519,25 @@ func (app *ABCIApp) saveBlock(blockHash []byte) error {
 		Transactions: app.currentBlockTxs,
 		Receipts:     app.currentBlockReceipts,
 	}
-	
+
 	// Guardar bloque
 	blockData, err := json.Marshal(block)
 	if err != nil {
 		return fmt.Errorf("error serializando bloque: %w", err)
 	}
-	
+
 	if err := app.storage.SaveBlock(app.currentBlockHeight, blockData); err != nil {
 		return fmt.Errorf("error guardando bloque: %w", err)
 	}
-	
+
 	// Guardar altura del último bloque
 	if err := app.storage.SaveLatestHeight(app.currentBlockHeight); err != nil {
 		logger.Warn("Error guardando altura: " + err.Error())
 	}
-	
-	logger.Info(fmt.Sprintf("Bloque guardado: height=%d, hash=%s, transactions=%d", 
+
+	logger.Info(fmt.Sprintf("Bloque guardado: height=%d, hash=%s, transactions=%d",
 		app.currentBlockHeight, blockHashStr[:8], len(app.currentBlockTxs)))
-	
+
 	return nil
 }
 
@@ -552,9 +565,9 @@ func (app *ABCIApp) Query(ctx context.Context, req *abcitypes.QueryRequest) (*ab
 	// - "tx/{hash}" - Obtener transacción por hash
 	// - "block/{height}" - Obtener bloque por altura
 	// - "height" - Obtener altura actual
-	
+
 	path := string(req.Path)
-	
+
 	switch {
 	case path == "height":
 		height := uint64(app.state.Height)
@@ -562,80 +575,80 @@ func (app *ABCIApp) Query(ctx context.Context, req *abcitypes.QueryRequest) (*ab
 			Code:  0,
 			Value: []byte(fmt.Sprintf("%d", height)),
 		}, nil
-	
+
 	case len(path) > 8 && path[:8] == "balance/":
 		address := path[8:]
 		accountState, err := app.executor.GetState(address)
 		if err != nil {
 			return &abcitypes.QueryResponse{
-				Code:  1,
-				Log:   fmt.Sprintf("Error obteniendo balance: %v", err),
+				Code: 1,
+				Log:  fmt.Sprintf("Error obteniendo balance: %v", err),
 			}, nil
 		}
-		
+
 		result := map[string]interface{}{
 			"address": address,
 			"balance": accountState.Balance,
 		}
-		
+
 		resultData, _ := json.Marshal(result)
 		return &abcitypes.QueryResponse{
 			Code:  0,
 			Value: resultData,
 		}, nil
-	
+
 	case len(path) > 7 && path[:7] == "account/":
 		address := path[7:]
 		accountState, err := app.executor.GetState(address)
 		if err != nil {
 			return &abcitypes.QueryResponse{
-				Code:  1,
-				Log:   fmt.Sprintf("Error obteniendo cuenta: %v", err),
+				Code: 1,
+				Log:  fmt.Sprintf("Error obteniendo cuenta: %v", err),
 			}, nil
 		}
-		
+
 		resultData, _ := json.Marshal(accountState)
 		return &abcitypes.QueryResponse{
 			Code:  0,
 			Value: resultData,
 		}, nil
-	
+
 	case len(path) > 3 && path[:3] == "tx/":
 		txHash := path[3:]
 		txData, err := app.storage.GetTransaction(txHash)
 		if err != nil {
 			return &abcitypes.QueryResponse{
-				Code:  1,
-				Log:   fmt.Sprintf("Transacción no encontrada: %s", txHash),
+				Code: 1,
+				Log:  fmt.Sprintf("Transacción no encontrada: %s", txHash),
 			}, nil
 		}
-		
+
 		return &abcitypes.QueryResponse{
 			Code:  0,
 			Value: txData,
 		}, nil
-	
+
 	case len(path) > 6 && path[:6] == "block/":
 		height := uint64(0)
 		fmt.Sscanf(path[6:], "%d", &height)
-		
+
 		blockData, err := app.storage.GetBlock(height)
 		if err != nil {
 			return &abcitypes.QueryResponse{
-				Code:  1,
-				Log:   fmt.Sprintf("Bloque no encontrado: altura %d", height),
+				Code: 1,
+				Log:  fmt.Sprintf("Bloque no encontrado: altura %d", height),
 			}, nil
 		}
-		
+
 		return &abcitypes.QueryResponse{
 			Code:  0,
 			Value: blockData,
 		}, nil
-	
+
 	default:
 		return &abcitypes.QueryResponse{
-			Code:  1,
-			Log:   fmt.Sprintf("Query path desconocido: %s", path),
+			Code: 1,
+			Log:  fmt.Sprintf("Query path desconocido: %s", path),
 		}, nil
 	}
 }
@@ -670,15 +683,15 @@ func (app *ABCIApp) validateTransaction(tx *Transaction) error {
 	if tx.From == "" {
 		return fmt.Errorf("dirección remitente vacía")
 	}
-	
+
 	if !common.IsHexAddress(tx.From) {
 		return fmt.Errorf("dirección remitente inválida: %s", tx.From)
 	}
-	
+
 	if tx.To != "" && !common.IsHexAddress(tx.To) {
 		return fmt.Errorf("dirección destino inválida: %s", tx.To)
 	}
-	
+
 	return nil
 }
 
@@ -770,14 +783,14 @@ func (app *ABCIApp) validateTransactionComplete(tx *Transaction) error {
 	if tx.Hash != expectedHash.Hex() {
 		return fmt.Errorf("hash de transacción inválido: esperado %s, tiene %s", expectedHash.Hex(), tx.Hash)
 	}
-	
+
 	return nil
 }
 
 // buildEvents construye eventos a partir del resultado de ejecución
 func (app *ABCIApp) buildEvents(result *execution.ExecutionResult) []abcitypes.Event {
 	events := []abcitypes.Event{}
-	
+
 	// Evento de ejecución
 	events = append(events, abcitypes.Event{
 		Type: "execution",
@@ -786,7 +799,7 @@ func (app *ABCIApp) buildEvents(result *execution.ExecutionResult) []abcitypes.E
 			{Key: "gas_used", Value: fmt.Sprintf("%d", result.GasUsed)},
 		},
 	})
-	
+
 	// Eventos de logs de contratos
 	for _, log := range result.Logs {
 		events = append(events, abcitypes.Event{
@@ -796,7 +809,7 @@ func (app *ABCIApp) buildEvents(result *execution.ExecutionResult) []abcitypes.E
 			},
 		})
 	}
-	
+
 	return events
 }
 
@@ -804,16 +817,16 @@ func (app *ABCIApp) buildEvents(result *execution.ExecutionResult) []abcitypes.E
 func (app *ABCIApp) PrepareProposal(ctx context.Context, req *abcitypes.PrepareProposalRequest) (*abcitypes.PrepareProposalResponse, error) {
 	fmt.Fprintf(os.Stdout, "[ABCI] PrepareProposal llamado: height=%d, maxTxBytes=%d\n", req.Height, req.MaxTxBytes)
 	os.Stdout.Sync()
-	
+
 	txs := make([][]byte, 0)
 	var totalBytes int64
-	
+
 	// Primero, agregar transacciones del mempool local si está disponible
 	if app.getMempool != nil {
 		localMempool := app.getMempool()
 		fmt.Fprintf(os.Stdout, "[ABCI] Mempool local tiene %d transacciones\n", len(localMempool))
 		os.Stdout.Sync()
-		
+
 		for i, tx := range localMempool {
 			// Serializar transacción a JSON
 			txBytes, err := json.Marshal(tx)
@@ -822,14 +835,14 @@ func (app *ABCIApp) PrepareProposal(ctx context.Context, req *abcitypes.PrepareP
 				os.Stderr.Sync()
 				continue // Saltar si no se puede serializar
 			}
-			
+
 			// Verificar límite de bytes
 			if totalBytes+int64(len(txBytes)) > req.MaxTxBytes {
 				fmt.Fprintf(os.Stdout, "[ABCI] Límite de bytes alcanzado: %d + %d > %d\n", totalBytes, len(txBytes), req.MaxTxBytes)
 				os.Stdout.Sync()
 				break
 			}
-			
+
 			txs = append(txs, txBytes)
 			totalBytes += int64(len(txBytes))
 			fmt.Fprintf(os.Stdout, "[ABCI] Transacción %s agregada a propuesta (total: %d bytes)\n", tx.Hash, totalBytes)
@@ -839,13 +852,13 @@ func (app *ABCIApp) PrepareProposal(ctx context.Context, req *abcitypes.PrepareP
 		fmt.Fprintf(os.Stderr, "[ABCI] ADVERTENCIA: getMempool es nil, no se pueden incluir transacciones del mempool local\n")
 		os.Stderr.Sync()
 	}
-	
+
 	// Luego, agregar transacciones que vienen de CometBFT (si hay espacio)
 	for _, tx := range req.Txs {
 		if totalBytes+int64(len(tx)) > req.MaxTxBytes {
 			break
 		}
-		
+
 		// Evitar duplicados: verificar si la transacción ya está en la lista
 		isDuplicate := false
 		for _, existingTx := range txs {
@@ -854,25 +867,33 @@ func (app *ABCIApp) PrepareProposal(ctx context.Context, req *abcitypes.PrepareP
 				break
 			}
 		}
-		
+
 		if !isDuplicate {
 			txs = append(txs, tx)
 			totalBytes += int64(len(tx))
 		}
 	}
-	
+
 	fmt.Fprintf(os.Stdout, "[ABCI] PrepareProposal retornando %d transacciones (total bytes: %d/%d)\n", len(txs), totalBytes, req.MaxTxBytes)
 	os.Stdout.Sync()
-	
+
 	return &abcitypes.PrepareProposalResponse{Txs: txs}, nil
 }
 
 // ProcessProposal procesa una propuesta de bloque (nueva API v1.0.1)
 func (app *ABCIApp) ProcessProposal(ctx context.Context, req *abcitypes.ProcessProposalRequest) (*abcitypes.ProcessProposalResponse, error) {
+	fmt.Fprintf(os.Stdout, "[ABCI] ProcessProposal llamado: height=%d, txs=%d\n", req.Height, len(req.Txs))
+	os.Stdout.Sync()
+
 	// Por ahora, aceptamos todas las propuestas
-	return &abcitypes.ProcessProposalResponse{
+	response := &abcitypes.ProcessProposalResponse{
 		Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT,
-	}, nil
+	}
+
+	fmt.Fprintf(os.Stdout, "[ABCI] ProcessProposal aceptando propuesta para bloque %d\n", req.Height)
+	os.Stdout.Sync()
+
+	return response, nil
 }
 
 // ExtendVote extiende un voto (nueva API v1.0.1)
@@ -921,21 +942,21 @@ func hasValidatorChanges(current []abcitypes.ValidatorUpdate, updates []abcitype
 		os.Stdout.Sync()
 		return true
 	}
-	
+
 	// Crear mapas para comparación rápida
 	currentMap := make(map[string]int64) // PubKey -> Power
 	updatesMap := make(map[string]int64)
-	
+
 	for _, v := range current {
 		key := string(v.PubKeyBytes)
 		currentMap[key] = v.Power
 	}
-	
+
 	for _, v := range updates {
 		key := string(v.PubKeyBytes)
 		updatesMap[key] = v.Power
 	}
-	
+
 	// Verificar si hay validadores nuevos o removidos
 	for key, power := range updatesMap {
 		if currentPower, exists := currentMap[key]; !exists {
@@ -950,7 +971,7 @@ func hasValidatorChanges(current []abcitypes.ValidatorUpdate, updates []abcitype
 			return true
 		}
 	}
-	
+
 	// Verificar si hay validadores removidos
 	for key := range currentMap {
 		if _, exists := updatesMap[key]; !exists {
@@ -960,11 +981,9 @@ func hasValidatorChanges(current []abcitypes.ValidatorUpdate, updates []abcitype
 			return true
 		}
 	}
-	
+
 	// No hay cambios
 	fmt.Fprintf(os.Stdout, "[ABCI] No se detectaron cambios en validadores\n")
 	os.Stdout.Sync()
 	return false
 }
-
-

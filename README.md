@@ -1,63 +1,88 @@
-# Oxy•gen Blockchain Nativa
+# Oxy•gen — Native Blockchain
 
-Blockchain nativa del sistema Oxy•gen que corre en nodos físicos. Completamente independiente de Internet, funciona mediante mesh network (WiFi/LoRa).
+Oxy•gen is a native blockchain designed to run on physical nodes and mesh networks disconnected from the public Internet. Its goal is to provide reliable execution and settlement infrastructure in environments with intermittent or no connectivity, enabling community-driven, resilient, and low-infrastructure use cases.
 
-## Stack Tecnológico
+## What was it designed for?
 
-- **Consenso**: CometBFT (anteriormente Tendermint Core)
-- **Ejecución**: EVMone (EVM compatible)
-- **Lenguaje Base**: Go
-- **SDK/API Layer**: Node.js + TypeScript
+- Offline continuity: nodes communicate over WiFi/LoRa links in a mesh topology.
+- Partition resilience: nodes can keep producing blocks locally and reconcile state once connectivity is restored.
+- EVM compatibility: deploy Solidity smart contracts using the EVMone engine.
+- PoS governance and security: validators and delegators secure the network via staking.
 
-## Arquitectura
+The design specification, assumptions, and threat model are described in the whitepaper. Note: the whitepaper is not in English. See the `docs/` folder for references and companion materials.
+
+## Technology stack
+
+- **Consensus**: CometBFT (formerly Tendermint Core)
+- **Execution**: EVMone (EVM compatible)
+- **Base language**: Go
+- **SDK/API layer**: Node.js + TypeScript
+
+## Repository layout
 
 ```
 oxy-blockchain/
-├── go/                    # Core de la blockchain (Go)
-│   ├── consensus/        # CometBFT integration
+├── go/                    # Blockchain core (Go)
+│   ├── consensus/         # CometBFT integration
 │   ├── execution/         # EVMone integration
-│   ├── storage/          # LevelDB/RocksDB
-│   └── network/          # P2P usando oxygen-sdk mesh
-# Nota: El cliente TypeScript está ahora en `oxygen-sdk/src/blockchain/`
-# Ver: `oxygen-sdk/src/blockchain/native-client.ts`
-└── contracts/            # Contratos inteligentes
+│   ├── storage/           # LevelDB/RocksDB
+│   └── network/           # P2P over mesh
+└── contracts/             # Example smart contracts
     ├── OXG.sol
     ├── GreenPool.sol
     └── DAO.sol
 ```
 
-## Características
+## Key features
 
-- ✅ Completamente independiente de Internet
-- ✅ Funciona mediante mesh network (WiFi/LoRa)
-- ✅ EVM compatible (contratos Solidity)
-- ✅ Tolerante a particiones de red
-- ✅ Consenso Proof of Stake (PoS)
+- ✅ Operates without Internet (mesh WiFi/LoRa)
+- ✅ Partition-tolerant with later reconciliation
+- ✅ EVM compatibility (Solidity contracts)
+- ✅ Proof of Stake (PoS) consensus
 
-## Desarrollo
+## Quickstart
 
-### Requisitos
+### Requirements
 
 - Go 1.21+
 - Node.js 18+
 - CometBFT
 - EVMone
 
-### Build
+### Local build
 
 ```bash
-# Build del core (Go)
+# Core (Go)
 cd go
 go build
-
-# Nota: El cliente TypeScript está en oxygen-sdk
-# Para usarlo, instalar oxygen-sdk: npm install @oxygen/sdk
 ```
 
-## Integración con oxygen-sdk
+### Containers (Docker)
 
-El nodo físico usa `oxygen-sdk` para:
-- Mesh network (transmisión de transacciones/bloques)
-- Discovery de validadores
-- Comunicación P2P entre nodos
+This repository includes `Dockerfile` and `docker-compose.yml` for development and testing.
+
+```bash
+# Development
+docker compose up --build
+
+# Production (example)
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+## Integration with oxygen-sdk
+
+Physical nodes use `oxygen-sdk` for:
+- Mesh topology and transaction/block transport
+- Validator discovery
+- P2P communication between nodes
+
+## Relation to the whitepaper
+
+This repository implements the components described in the Oxy•gen whitepaper, including:
+- Offline mesh network design and delayed synchronization
+- CometBFT-based consensus mechanism
+- EVM-compatible execution layer (EVMone)
+- PoS governance and economics (validators/delegators)
+
+For additional context, see the whitepaper and materials in `docs/`. 
 
