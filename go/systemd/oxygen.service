@@ -1,0 +1,27 @@
+[Unit]
+Description=Oxygen Node (Go + CometBFT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=oxygen
+Group=oxygen
+WorkingDirectory=/opt/oxygen/oxy-blockchain/go/cmd/oxy-blockchain
+Environment=OXY_ENV=production
+Environment=OXY_CHAIN_ID=oxy-mainnet
+Environment=OXY_DATA_DIR=/var/lib/oxygen/mainnet_data
+Environment=COMETBFT_HOME=/var/lib/oxygen/mainnet_data/cometbft
+Environment=BLOCKCHAIN_API_ENABLED=true
+Environment=BLOCKCHAIN_API_HOST=0.0.0.0
+Environment=BLOCKCHAIN_API_PORT=8080
+Environment=OXY_LOG_LEVEL=info
+Environment=OXY_LOG_JSON=true
+Environment=OXY_PERSISTENT_PEERS=
+Environment=OXY_SEEDS=
+ExecStart=/opt/oxygen/oxy-blockchain/go/cmd/oxy-blockchain/oxy-node
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

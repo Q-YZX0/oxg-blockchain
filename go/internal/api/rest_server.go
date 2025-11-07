@@ -57,22 +57,33 @@ func (s *RestServer) Start() error {
 
 	// Endpoints
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/health/liveness", s.handleLiveness)
+	mux.HandleFunc("/health/readiness", s.handleReadiness)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/metrics/prometheus", s.handlePrometheusMetrics)
 	mux.HandleFunc("/api/v1/blocks/", s.handleBlocks)
 	mux.HandleFunc("/api/v1/transactions/", s.handleTransactions)
 	mux.HandleFunc("/api/v1/accounts/", s.handleAccounts)
 	mux.HandleFunc("/api/v1/submit-tx", s.handleSubmitTx)
 	mux.HandleFunc("/api/v1/validators", s.handleValidators) // Nuevo endpoint
 
-	// Middleware CORS básico
-	handler := s.corsMiddleware(mux)
+    // Middlewares: CORS, RateLimit, MaxBody
+    handler := s.maxBodyMiddleware(
+        s.rateLimitMiddleware(
+            s.corsMiddleware(mux),
+        ),
+    )
 
 	addr := s.host + ":" + s.port
-	s.server = &http.Server{
+    // Timeouts configurables por env
+    readTimeout := getEnvDurationMs("OXY_REST_READ_TIMEOUT_MS", 15000)
+    writeTimeout := getEnvDurationMs("OXY_REST_WRITE_TIMEOUT_MS", 15000)
+
+    s.server = &http.Server{
 		Addr:         addr,
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+        ReadTimeout:  readTimeout,
+        WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -124,9 +135,16 @@ func (s *RestServer) Stop() error {
 // corsMiddleware añade headers CORS
 func (s *RestServer) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+        allowed := os.Getenv("OXY_REST_CORS_ORIGINS")
+        origin := r.Header.Get("Origin")
+        if allowed == "*" || allowed == "" {
+            w.Header().Set("Access-Control-Allow-Origin", "*")
+        } else if origin != "" && isOriginAllowed(origin, allowed) {
+            w.Header().Set("Access-Control-Allow-Origin", origin)
+            w.Header().Set("Vary", "Origin")
+        }
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -135,6 +153,91 @@ func (s *RestServer) corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rateLimitMiddleware aplica un rate limit simple por IP (token bucket en memoria)
+func (s *RestServer) rateLimitMiddleware(next http.Handler) http.Handler {
+    type bucket struct {
+        tokens     float64
+        lastRefill time.Time
+    }
+    var (
+        rps   = getEnvFloat("OXY_REST_RATE_LIMIT_RPS", 50)
+        burst = getEnvFloat("OXY_REST_BURST", 100)
+        store = make(map[string]*bucket)
+    )
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ip := r.RemoteAddr
+        b, ok := store[ip]
+        now := time.Now()
+        if !ok {
+            b = &bucket{tokens: burst, lastRefill: now}
+            store[ip] = b
+        }
+        // Refill tokens
+        elapsed := now.Sub(b.lastRefill).Seconds()
+        b.tokens = minFloat(burst, b.tokens+elapsed*rps)
+        b.lastRefill = now
+        if b.tokens < 1 {
+            w.Header().Set("Retry-After", "1")
+            http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+            return
+        }
+        b.tokens -= 1
+        next.ServeHTTP(w, r)
+    })
+}
+
+// maxBodyMiddleware limita el tamaño del body según env
+func (s *RestServer) maxBodyMiddleware(next http.Handler) http.Handler {
+    maxBytes := getEnvInt("OXY_REST_MAX_BODY_BYTES", 1048576)
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
+        next.ServeHTTP(w, r)
+    })
+}
+
+func isOriginAllowed(origin string, allowedList string) bool {
+    for _, a := range strings.Split(allowedList, ",") {
+        if strings.TrimSpace(a) == origin {
+            return true
+        }
+    }
+    return false
+}
+
+func getEnvDurationMs(key string, defMs int) time.Duration {
+    if v := os.Getenv(key); v != "" {
+        if n, err := strconv.Atoi(v); err == nil {
+            return time.Duration(n) * time.Millisecond
+        }
+    }
+    return time.Duration(defMs) * time.Millisecond
+}
+
+func getEnvFloat(key string, def float64) float64 {
+    if v := os.Getenv(key); v != "" {
+        if f, err := strconv.ParseFloat(v, 64); err == nil {
+            return f
+        }
+    }
+    return def
+}
+
+func getEnvInt(key string, def int) int {
+    if v := os.Getenv(key); v != "" {
+        if n, err := strconv.Atoi(v); err == nil {
+            return n
+        }
+    }
+    return def
+}
+
+func minFloat(a, b float64) float64 {
+    if a < b {
+        return a
+    }
+    return b
 }
 
 // handleHealth maneja el endpoint /health
@@ -158,6 +261,56 @@ func (s *RestServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(status)
+}
+
+// handleLiveness maneja el endpoint /health/liveness
+func (s *RestServer) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	isLive := s.healthChecker.IsLive()
+	w.Header().Set("Content-Type", "application/json")
+	
+	if isLive {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "alive",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "dead",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	}
+}
+
+// handleReadiness maneja el endpoint /health/readiness
+func (s *RestServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	isReady := s.healthChecker.IsReady()
+	w.Header().Set("Content-Type", "application/json")
+	
+	if isReady {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ready",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "not_ready",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	}
 }
 
 // handleMetrics maneja el endpoint /metrics
@@ -194,6 +347,101 @@ func (s *RestServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(metricsData)
+}
+
+// handlePrometheusMetrics maneja el endpoint /metrics/prometheus
+func (s *RestServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.metrics == nil {
+		http.Error(w, "Metrics not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Actualizar métricas dinámicas
+	if s.consensus != nil {
+		latestBlock, err := s.consensus.GetLatestBlock()
+		if err == nil && latestBlock != nil {
+			s.metrics.SetBlockHeight(latestBlock.Header.Height)
+		}
+		mempool := s.consensus.GetMempool()
+		if mempool != nil {
+			s.metrics.SetMempoolSize(len(mempool))
+		}
+	}
+
+	metricsData := s.metrics.GetMetrics()
+	uptimeSeconds := metricsData.Uptime.Seconds()
+
+	// Formato Prometheus
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(http.StatusOK)
+
+	// Escribir métricas en formato Prometheus
+	fmt.Fprintf(w, "# HELP oxy_blocks_processed_total Total number of blocks processed\n")
+	fmt.Fprintf(w, "# TYPE oxy_blocks_processed_total counter\n")
+	fmt.Fprintf(w, "oxy_blocks_processed_total %d\n", metricsData.BlocksProcessed)
+
+	fmt.Fprintf(w, "# HELP oxy_block_processing_time_seconds Average block processing time\n")
+	fmt.Fprintf(w, "# TYPE oxy_block_processing_time_seconds gauge\n")
+	fmt.Fprintf(w, "oxy_block_processing_time_seconds %.6f\n", metricsData.BlockProcessingTime.Seconds())
+
+	fmt.Fprintf(w, "# HELP oxy_transactions_processed_total Total number of transactions processed\n")
+	fmt.Fprintf(w, "# TYPE oxy_transactions_processed_total counter\n")
+	fmt.Fprintf(w, "oxy_transactions_processed_total %d\n", metricsData.TransactionsProcessed)
+
+	fmt.Fprintf(w, "# HELP oxy_transactions_rejected_total Total number of transactions rejected\n")
+	fmt.Fprintf(w, "# TYPE oxy_transactions_rejected_total counter\n")
+	fmt.Fprintf(w, "oxy_transactions_rejected_total %d\n", metricsData.TransactionsRejected)
+
+	fmt.Fprintf(w, "# HELP oxy_transactions_per_second Current transactions per second\n")
+	fmt.Fprintf(w, "# TYPE oxy_transactions_per_second gauge\n")
+	fmt.Fprintf(w, "oxy_transactions_per_second %.2f\n", metricsData.TransactionsPerSecond)
+
+	fmt.Fprintf(w, "# HELP oxy_peers_connected Number of connected peers\n")
+	fmt.Fprintf(w, "# TYPE oxy_peers_connected gauge\n")
+	fmt.Fprintf(w, "oxy_peers_connected %d\n", metricsData.PeersConnected)
+
+	fmt.Fprintf(w, "# HELP oxy_messages_received_total Total messages received\n")
+	fmt.Fprintf(w, "# TYPE oxy_messages_received_total counter\n")
+	fmt.Fprintf(w, "oxy_messages_received_total %d\n", metricsData.MessagesReceived)
+
+	fmt.Fprintf(w, "# HELP oxy_messages_sent_total Total messages sent\n")
+	fmt.Fprintf(w, "# TYPE oxy_messages_sent_total counter\n")
+	fmt.Fprintf(w, "oxy_messages_sent_total %d\n", metricsData.MessagesSent)
+
+	fmt.Fprintf(w, "# HELP oxy_block_height Current block height\n")
+	fmt.Fprintf(w, "# TYPE oxy_block_height gauge\n")
+	fmt.Fprintf(w, "oxy_block_height %d\n", metricsData.CurrentBlockHeight)
+
+	fmt.Fprintf(w, "# HELP oxy_state_db_size_bytes State database size in bytes\n")
+	fmt.Fprintf(w, "# TYPE oxy_state_db_size_bytes gauge\n")
+	fmt.Fprintf(w, "oxy_state_db_size_bytes %d\n", metricsData.StateDBSize)
+
+	fmt.Fprintf(w, "# HELP oxy_mempool_size Current mempool size\n")
+	fmt.Fprintf(w, "# TYPE oxy_mempool_size gauge\n")
+	fmt.Fprintf(w, "oxy_mempool_size %d\n", metricsData.MempoolSize)
+
+	fmt.Fprintf(w, "# HELP oxy_gas_used_total Total gas used\n")
+	fmt.Fprintf(w, "# TYPE oxy_gas_used_total counter\n")
+	fmt.Fprintf(w, "oxy_gas_used_total %d\n", metricsData.TotalGasUsed)
+
+	fmt.Fprintf(w, "# HELP oxy_gas_used_average Average gas used per transaction\n")
+	fmt.Fprintf(w, "# TYPE oxy_gas_used_average gauge\n")
+	fmt.Fprintf(w, "oxy_gas_used_average %d\n", metricsData.AverageGasUsed)
+
+	fmt.Fprintf(w, "# HELP oxy_uptime_seconds Node uptime in seconds\n")
+	fmt.Fprintf(w, "# TYPE oxy_uptime_seconds gauge\n")
+	fmt.Fprintf(w, "oxy_uptime_seconds %.2f\n", uptimeSeconds)
+
+	if !metricsData.LastBlockTime.IsZero() {
+		fmt.Fprintf(w, "# HELP oxy_last_block_time_seconds Timestamp of last block\n")
+		fmt.Fprintf(w, "# TYPE oxy_last_block_time_seconds gauge\n")
+		fmt.Fprintf(w, "oxy_last_block_time_seconds %.0f\n", float64(metricsData.LastBlockTime.Unix()))
+	}
 }
 
 // handleBlocks maneja /api/v1/blocks/{height} o /api/v1/blocks/latest

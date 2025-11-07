@@ -1,0 +1,130 @@
+{
+  "dashboard": {
+    "title": "Oxygen Node Metrics",
+    "tags": ["blockchain", "oxygen"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Block Height",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "oxy_block_height",
+            "legendFormat": "Block Height",
+            "refId": "A"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 2,
+        "title": "Transactions Per Second",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "oxy_transactions_per_second",
+            "legendFormat": "TPS",
+            "refId": "A"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 3,
+        "title": "Blocks Processed Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(oxy_blocks_processed_total[5m])",
+            "legendFormat": "Blocks/sec",
+            "refId": "A"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 4,
+        "title": "Peers Connected",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "oxy_peers_connected",
+            "legendFormat": "Peers",
+            "refId": "A"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 5,
+        "title": "Mempool Size",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "oxy_mempool_size",
+            "legendFormat": "Pending TXs",
+            "refId": "A"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 6,
+        "title": "Gas Usage",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "oxy_gas_used_total",
+            "legendFormat": "Total Gas",
+            "refId": "A"
+          },
+          {
+            "expr": "oxy_gas_used_average",
+            "legendFormat": "Avg Gas/TX",
+            "refId": "B"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 7,
+        "title": "Transaction Status",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(oxy_transactions_processed_total[5m])",
+            "legendFormat": "Processed/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(oxy_transactions_rejected_total[5m])",
+            "legendFormat": "Rejected/sec",
+            "refId": "B"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "id": 8,
+        "title": "Uptime",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "oxy_uptime_seconds / 3600",
+            "legendFormat": "Hours",
+            "refId": "A"
+          }
+        ],
+        "type": "stat"
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

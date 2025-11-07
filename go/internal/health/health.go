@@ -199,3 +199,24 @@ func (h *HealthChecker) IsHealthy() bool {
 	return status.Status == "healthy"
 }
 
+// IsLive retorna si el nodo está vivo (liveness check)
+// Un nodo está "live" si no está completamente caído
+func (h *HealthChecker) IsLive() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	
+	// Liveness: solo verificar que los componentes críticos no estén todos caídos
+	// Si al menos uno está funcionando, el nodo está "live"
+	return h.storageHealthy || h.evmHealthy || h.consensusHealthy
+}
+
+// IsReady retorna si el nodo está listo para recibir tráfico (readiness check)
+// Un nodo está "ready" si todos los componentes críticos están operativos
+func (h *HealthChecker) IsReady() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	
+	// Readiness: todos los componentes críticos deben estar operativos
+	return h.storageHealthy && h.evmHealthy && h.consensusHealthy
+}
+

@@ -69,13 +69,7 @@ if not exist "go.mod" (
 echo ✅ go.mod encontrado
 echo.
 
-REM Crear directorio de datos si no existe
-if not exist "%OXY_DATA_DIR%" (
-    echo 📁 Creando directorio de datos: %OXY_DATA_DIR%
-    mkdir "%OXY_DATA_DIR%"
-) else (
-    echo ✅ Directorio de datos existe: %OXY_DATA_DIR%
-)
+REM NOTA: No crear aún el directorio; se creará después de cambiar al directorio de ejecución
 echo.
 
 REM Verificar si CometBFT está inicializado
@@ -188,15 +182,25 @@ REM Configurar variables de entorno antes de ejecutar
 set BLOCKCHAIN_API_ENABLED=%BLOCKCHAIN_API_ENABLED%
 set BLOCKCHAIN_API_PORT=%BLOCKCHAIN_API_PORT%
 set BLOCKCHAIN_API_HOST=%BLOCKCHAIN_API_HOST%
-set OXY_DATA_DIR=%OXY_DATA_DIR%
+REM Convertir OXY_DATA_DIR a ruta ABSOLUTA relativa a este directorio
+set OXY_DATA_DIR=%CD%\%OXY_DATA_DIR%
 set OXY_CHAIN_ID=%OXY_CHAIN_ID%
 set OXY_MESH_ENDPOINT=%OXY_MESH_ENDPOINT%
 set OXY_LOG_LEVEL=%OXY_LOG_LEVEL%
 set OXY_LOG_JSON=%OXY_LOG_JSON%
-set COMETBFT_HOME=%COMETBFT_HOME%
+set COMETBFT_HOME=%OXY_DATA_DIR%\cometbft
 
 REM Ejecutar directamente (sin PowerShell) para que los logs se vean
 echo.
+REM Crear directorio de datos si no existe (ahora en ruta absoluta)
+if not exist "%OXY_DATA_DIR%" (
+    echo 📁 Creando directorio de datos: %OXY_DATA_DIR%
+    mkdir "%OXY_DATA_DIR%"
+) else (
+    echo ✅ Directorio de datos existe: %OXY_DATA_DIR%
+)
+echo.
+
 echo Ejecutando testnet.exe con las siguientes variables:
 echo   BLOCKCHAIN_API_ENABLED=%BLOCKCHAIN_API_ENABLED%
 echo   BLOCKCHAIN_API_PORT=%BLOCKCHAIN_API_PORT%
